@@ -1,183 +1,1186 @@
-import json
-import os
-import random
-import re
-import sqlite3
-import threading
-import time
-from datetime import datetime, timedelta
-from pathlib import Path
-from urllib.request import Request, urlopen
-from zoneinfo import ZoneInfo
-
 import streamlit as st
-
-DB = Path(__file__).with_name("tasks.db")
-DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
-WORDS = {"واحد":"1","واحدة":"1","اتنين":"2","اثنين":"2","تلاتة":"3","ثلاثة":"3","اربعة":"4","أربعة":"4","خمسة":"5","خمسه":"5","ستة":"6","سبعة":"7","ثمانية":"8","تمانية":"8","تسعة":"9","عشرة":"10","عشره":"10","حداشر":"11","اتناشر":"12"}
-OPENERS = ("يلا يا بطل، وقت الجد وصل.", "المهمة بتنادي عليك، متخليشها تستنى.", "خمس دقائق بداية أحسن من تأجيل كبير.", "سيب أي تشتيت وابدأ أول خطوة.", "أنت وعدت نفسك بالمهمة دي، يلا نفذ.", "الإنجاز مش محتاج مزاج، محتاج قرار.", "النسخة الأقوى منك مستنياك تبدأ.", "هدفك مش بعيد، بس عايز الحركة دي.", "مفيش هروب النهارده، ابدأ دلوقتي.", "التنبيه وصل، والباقي عليك يا نجم.", "قوم اعملها، وبعدها اشكر نفسك.", "العادة بتتبني دلوقتي، مش بعدين.", "متفاوضش نفسك كتير، ابدأ وبس.", "الدقيقة دي ممكن تكون أحسن قرار في يومك.", "مفيش حد هيعملها مكانك، يلا بينا.", "يلا نكسب الجولة دي قبل ما الوقت يسبقنا.", "خد نفس، افتح المهمة، وابدأ أول جزء.", "المهمة الصغيرة دي بتبني فرق كبير.", "الكسل بيحب كلمة بعدين، وأنت قول له لأ.", "تركيز بسيط الآن، وفخر كبير بعدين.", "مش لازم تعملها كاملة، المهم تبدأها.", "ده وقتك تثبت إن كلامك مع نفسك له قيمة.", "بطل تحضير في دماغك، وابدأ تنفيذ بإيدك.", "النجاح بيحب الناس اللي بتقوم وقت التنبيه.")
-FOLLOW = (("عدت دقيقة ولسه مستني كلمة تم. ابدأ حتى لو بخطوة صغيرة.", "فينك يا بطل؟ دقيقة كاملة كفاية تفكير. افتح المهمة دلوقتي.", "أنا مش ناسي، والمهمة كمان مش هتختفي. يلا ابدأ."), ("بصراحة كده، المهمة مستنياك وأنت سايبها. قوم يا نجم.", "مفيش تسويف النهارده. افتح المهمة واكتب تم لما تبدأ.", "هدفك أهم من السوشيال دقيقة واحدة. ركز وابدأ."), ("ده التنبيه الأخير قبل ما أعتبرك بتتهرب! ابدأ حالاً.", "بطل تفاوض، بطل تأجيل، نفذ أول خطوة الآن.", "مستني تم منك. خليك قد وعدك لنفسك."))
+import requests
+import pandas as pd
+import re
+from urllib.parse import urljoin
 
 
-def db():
-    connection = sqlite3.connect(DB)
-    connection.row_factory = sqlite3.Row
-    return connection
+# =========================================================
+# 🔐 LOGIN CREDENTIALS
+# =========================================================
+# ضع الإيميلات والباسوردات هنا
+#
+# مثال:
+# "myemail@gmail.com": "MyPassword123"
+#
+# يمكنك إضافة أكثر من مستخدم.
+
+USERS = {
+    "your-email@gmail.com": "YOUR_PASSWORD",
+    "second-email@gmail.com": "SECOND_PASSWORD",
+}
 
 
-def setup():
-    with db() as c:
-        c.executescript("""CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, chat_id INTEGER, text TEXT, hour INTEGER, minute INTEGER, last_sent TEXT);
-        CREATE TABLE IF NOT EXISTS reminders (task_id INTEGER PRIMARY KEY, chat_id INTEGER, text TEXT, phase INTEGER, next_at TEXT);
-        CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);""")
+# =========================================================
+# PAGE CONFIG
+# =========================================================
+
+st.set_page_config(
+    page_title="Business Data Scraper",
+    page_icon="🔎",
+    layout="wide"
+)
 
 
-def api(token, method, payload):
-    try:
-        request = Request(f"https://api.telegram.org/bot{token}/{method}", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-        with urlopen(request, timeout=30) as response:
-            data = json.loads(response.read().decode())
-        return data.get("result") if data.get("ok") else None
-    except Exception:
+# =========================================================
+# LOGIN SYSTEM
+# =========================================================
+
+def check_login(email, password):
+
+    email = email.strip().lower()
+
+    return (
+        email in USERS
+        and USERS[email] == password
+    )
+
+
+def login_page():
+
+    st.markdown(
+        """
+        <style>
+
+        .login-box {
+            max-width: 500px;
+            margin: 100px auto;
+            padding: 35px;
+            border-radius: 15px;
+            border: 1px solid #ddd;
+        }
+
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.title("🔐 Business Data Scraper")
+
+    st.write(
+        "Please login to continue."
+    )
+
+    with st.form("login_form"):
+
+        email = st.text_input(
+            "📧 Email",
+            placeholder="Enter your email"
+        )
+
+        password = st.text_input(
+            "🔑 Password",
+            type="password",
+            placeholder="Enter your password"
+        )
+
+        login = st.form_submit_button(
+            "Login",
+            use_container_width=True
+        )
+
+        if login:
+
+            if not email or not password:
+
+                st.error(
+                    "Please enter your email and password."
+                )
+
+            elif check_login(
+                email,
+                password
+            ):
+
+                st.session_state[
+                    "authenticated"
+                ] = True
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "❌ Invalid email or password."
+                )
+
+
+# =========================================================
+# AUTHENTICATION
+# =========================================================
+
+if "authenticated" not in st.session_state:
+
+    st.session_state[
+        "authenticated"
+    ] = False
+
+
+if not st.session_state["authenticated"]:
+
+    login_page()
+
+    st.stop()
+
+
+# =========================================================
+# LOGOUT
+# =========================================================
+
+with st.sidebar:
+
+    st.success("🟢 Logged in")
+
+    if st.button(
+        "🚪 Logout",
+        use_container_width=True
+    ):
+
+        st.session_state[
+            "authenticated"
+        ] = False
+
+        st.session_state.pop(
+            "results",
+            None
+        )
+
+        st.rerun()
+
+
+# =========================================================
+# API SETTINGS
+# =========================================================
+
+NOMINATIM_URL = (
+    "https://nominatim.openstreetmap.org/search"
+)
+
+
+OVERPASS_SERVERS = [
+
+    "https://overpass-api.de/api/interpreter",
+
+    "https://overpass.kumi.systems/api/interpreter",
+
+    "https://overpass.private.coffee/api/interpreter"
+
+]
+
+
+HEADERS = {
+
+    "User-Agent":
+        "BusinessDataScraper/1.0",
+
+    "Accept":
+        "application/json"
+
+}
+
+
+# =========================================================
+# LOCATION SEARCH
+# =========================================================
+
+def get_location_coordinates(location):
+
+    params = {
+
+        "q": location,
+
+        "format": "json",
+
+        "limit": 1
+
+    }
+
+    response = requests.get(
+
+        NOMINATIM_URL,
+
+        params=params,
+
+        headers={
+            "User-Agent":
+            "BusinessDataScraper/1.0"
+        },
+
+        timeout=30
+
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if not data:
+
         return None
 
+    return {
 
-def send(token, chat_id, text, markup=None):
-    data = {"chat_id": chat_id, "text": text}
-    if markup: data["reply_markup"] = markup
-    return api(token, "sendMessage", data)
+        "lat":
+            float(data[0]["lat"]),
+
+        "lon":
+            float(data[0]["lon"]),
+
+        "name":
+            data[0]["display_name"]
+
+    }
 
 
-def parse_task(raw):
-    if "|" in raw:
-        clock, task = (part.strip() for part in raw.split("|", 1))
-    else:
-        text = raw.translate(DIGITS).lower()
-        for word, number in WORDS.items(): text = re.sub(rf"\b{word}\b", number, text)
-        found = re.search(r"(?P<prefix>الساعة|الساعه|at)?\s*(?P<hour>\d{1,2})(?:\s*(?:و|:)?\s*(?P<minute>\d{1,2}|ربع|نص|نصف))?\s*(?P<period>الفجر|صباحا?|صباحاً|مساءا?|مساءً|بالليل|بليل|ليلا?|ليلًا)?", text)
-        if not found or not any((found["prefix"], found["minute"], found["period"])): raise ValueError
-        hour = int(found["hour"])
-        minute_value = found["minute"] or "0"
-        minute_words = {"ربع": 15, "نص": 30, "نصف": 30}
-        minute = minute_words[minute_value] if minute_value in minute_words else int(minute_value)
-        period = found["period"] or ""
-        if period in {"مساء", "مساءا", "مساءً", "بالليل", "بليل", "ليل", "ليلا", "ليلًا"} and hour < 12: hour += 12
-        if period in {"الفجر", "صباح", "صباحا", "صباحاً"} and hour == 12: hour = 0
-        clock, task = f"{hour}:{minute}", (text[:found.start()] + text[found.end():]).strip(" -،.")
+# =========================================================
+# CATEGORY MAPPING
+# =========================================================
+
+def get_category_filter(category):
+
+    category = (
+        category
+        .lower()
+        .strip()
+    )
+
+    categories = {
+
+        "restaurant":
+            '["amenity"="restaurant"]',
+
+        "restaurants":
+            '["amenity"="restaurant"]',
+
+        "cafe":
+            '["amenity"="cafe"]',
+
+        "cafes":
+            '["amenity"="cafe"]',
+
+        "hotel":
+            '["tourism"="hotel"]',
+
+        "hotels":
+            '["tourism"="hotel"]',
+
+        "pharmacy":
+            '["amenity"="pharmacy"]',
+
+        "pharmacies":
+            '["amenity"="pharmacy"]',
+
+        "hospital":
+            '["amenity"="hospital"]',
+
+        "hospitals":
+            '["amenity"="hospital"]',
+
+        "school":
+            '["amenity"="school"]',
+
+        "schools":
+            '["amenity"="school"]',
+
+        "bank":
+            '["amenity"="bank"]',
+
+        "banks":
+            '["amenity"="bank"]',
+
+        "bakery":
+            '["shop"="bakery"]',
+
+        "bakeries":
+            '["shop"="bakery"]',
+
+        "supermarket":
+            '["shop"="supermarket"]',
+
+        "supermarkets":
+            '["shop"="supermarket"]',
+
+        "gym":
+            '["leisure"="fitness_centre"]',
+
+        "gyms":
+            '["leisure"="fitness_centre"]',
+
+        "dentist":
+            '["amenity"="dentist"]',
+
+        "dentists":
+            '["amenity"="dentist"]',
+
+        "salon":
+            '["shop"="beauty"]',
+
+        "beauty salon":
+            '["shop"="beauty"]',
+
+        "car wash":
+            '["amenity"="car_wash"]',
+
+        "carwash":
+            '["amenity"="car_wash"]',
+
+    }
+
+    if category in categories:
+
+        return categories[category]
+
+    # Generic category/name search
+
+    safe_category = (
+        category
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+    )
+
+    return (
+        f'[name~"{safe_category}",i]'
+    )
+
+
+# =========================================================
+# OVERPASS REQUEST
+# =========================================================
+
+def query_overpass(query):
+
+    last_error = None
+
+    for server in OVERPASS_SERVERS:
+
+        try:
+
+            response = requests.post(
+
+                server,
+
+                data={
+                    "data": query
+                },
+
+                headers={
+                    **HEADERS,
+                    "Content-Type":
+                    "application/x-www-form-urlencoded"
+                },
+
+                timeout=120
+
+            )
+
+            if response.status_code == 200:
+
+                return response.json()
+
+            last_error = (
+                f"HTTP {response.status_code}"
+            )
+
+        except requests.RequestException as e:
+
+            last_error = str(e)
+
+    raise Exception(
+        "All search servers failed. "
+        f"Last error: {last_error}"
+    )
+
+
+# =========================================================
+# BUSINESS SCRAPER
+# =========================================================
+
+def scrape_businesses(
+    location,
+    category,
+    radius
+):
+
+    coordinates = (
+        get_location_coordinates(
+            location
+        )
+    )
+
+    if not coordinates:
+
+        return pd.DataFrame()
+
+    lat = coordinates["lat"]
+
+    lon = coordinates["lon"]
+
+    category_filter = (
+        get_category_filter(
+            category
+        )
+    )
+
+    query = f"""
+[out:json][timeout:120];
+
+(
+    node{category_filter}
+    (around:{radius},{lat},{lon});
+
+    way{category_filter}
+    (around:{radius},{lat},{lon});
+
+    relation{category_filter}
+    (around:{radius},{lat},{lon});
+);
+
+out center tags;
+"""
+
+    data = query_overpass(
+        query
+    )
+
+    elements = data.get(
+        "elements",
+        []
+    )
+
+    results = []
+
+    for element in elements:
+
+        tags = element.get(
+            "tags",
+            {}
+        )
+
+        # -------------------------------------
+        # Coordinates
+        # -------------------------------------
+
+        if element.get("type") == "node":
+
+            latitude = element.get(
+                "lat"
+            )
+
+            longitude = element.get(
+                "lon"
+            )
+
+        else:
+
+            center = element.get(
+                "center",
+                {}
+            )
+
+            latitude = center.get(
+                "lat"
+            )
+
+            longitude = center.get(
+                "lon"
+            )
+
+        # -------------------------------------
+        # Business name
+        # -------------------------------------
+
+        name = tags.get(
+            "name",
+            ""
+        )
+
+        if not name:
+
+            continue
+
+        # -------------------------------------
+        # Address
+        # -------------------------------------
+
+        address_parts = [
+
+            tags.get(
+                "addr:housenumber",
+                ""
+            ),
+
+            tags.get(
+                "addr:street",
+                ""
+            ),
+
+            tags.get(
+                "addr:city",
+                ""
+            ),
+
+            tags.get(
+                "addr:postcode",
+                ""
+            )
+
+        ]
+
+        address = ", ".join(
+
+            part
+
+            for part in address_parts
+
+            if part
+
+        )
+
+        # -------------------------------------
+        # Phone
+        # -------------------------------------
+
+        phone = (
+
+            tags.get("phone")
+
+            or tags.get(
+                "contact:phone"
+            )
+
+            or tags.get(
+                "contact:mobile"
+            )
+
+            or ""
+
+        )
+
+        # -------------------------------------
+        # Website
+        # -------------------------------------
+
+        website = (
+
+            tags.get("website")
+
+            or tags.get(
+                "contact:website"
+            )
+
+            or tags.get("url")
+
+            or ""
+
+        )
+
+        # -------------------------------------
+        # Email
+        # -------------------------------------
+
+        email = (
+
+            tags.get("email")
+
+            or tags.get(
+                "contact:email"
+            )
+
+            or ""
+
+        )
+
+        # -------------------------------------
+        # Category
+        # -------------------------------------
+
+        business_type = (
+
+            tags.get("amenity")
+
+            or tags.get("shop")
+
+            or tags.get("tourism")
+
+            or tags.get("leisure")
+
+            or ""
+
+        )
+
+        # -------------------------------------
+        # Save
+        # -------------------------------------
+
+        results.append({
+
+            "Name":
+                name,
+
+            "Phone":
+                phone,
+
+            "Email":
+                email,
+
+            "Website":
+                website,
+
+            "Address":
+                address,
+
+            "City":
+                tags.get(
+                    "addr:city",
+                    ""
+                ),
+
+            "Country":
+                tags.get(
+                    "addr:country",
+                    ""
+                ),
+
+            "Category":
+                business_type,
+
+            "Cuisine":
+                tags.get(
+                    "cuisine",
+                    ""
+                ),
+
+            "Opening Hours":
+                tags.get(
+                    "opening_hours",
+                    ""
+                ),
+
+            "Latitude":
+                latitude,
+
+            "Longitude":
+                longitude,
+
+            "Social Media":
+                ""
+
+        })
+
+    df = pd.DataFrame(
+        results
+    )
+
+    if df.empty:
+
+        return df
+
+    # Remove duplicates
+
+    df = df.drop_duplicates(
+        subset=[
+            "Name",
+            "Latitude",
+            "Longitude"
+        ]
+    )
+
+    return df.reset_index(
+        drop=True
+    )
+
+
+# =========================================================
+# EMAIL EXTRACTION
+# =========================================================
+
+def extract_emails(text):
+
+    pattern = (
+        r"[A-Za-z0-9._%+-]+"
+        r"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    )
+
+    emails = re.findall(
+        pattern,
+        text
+    )
+
+    return list(
+        dict.fromkeys(
+            emails
+        )
+    )
+
+
+# =========================================================
+# WEBSITE SCRAPER
+# =========================================================
+
+def scrape_website(url):
+
+    if not url:
+
+        return "", ""
+
+    if not url.startswith(
+        (
+            "http://",
+            "https://"
+        )
+    ):
+
+        url = (
+            "https://" +
+            url
+        )
+
     try:
-        hour, minute = (int(value) for value in clock.split(":", 1))
-        if not 0 <= hour <= 23 or not 0 <= minute <= 59 or not task: raise ValueError
-        return hour, minute, task
-    except (ValueError, TypeError): raise ValueError from None
+
+        response = requests.get(
+
+            url,
+
+            headers={
+                "User-Agent":
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "Chrome/120 Safari/537.36"
+            },
+
+            timeout=15
+
+        )
+
+        if response.status_code != 200:
+
+            return "", ""
+
+        html = response.text
+
+        # -------------------------------------
+        # Emails
+        # -------------------------------------
+
+        emails = extract_emails(
+            html
+        )
+
+        email = (
+            emails[0]
+            if emails
+            else ""
+        )
+
+        # -------------------------------------
+        # Social Media
+        # -------------------------------------
+
+        social_domains = [
+
+            "facebook.com",
+
+            "instagram.com",
+
+            "linkedin.com",
+
+            "twitter.com",
+
+            "x.com",
+
+            "tiktok.com"
+
+        ]
+
+        links = re.findall(
+
+            r'href=["\'](.*?)["\']',
+
+            html,
+
+            re.IGNORECASE
+
+        )
+
+        socials = []
+
+        for link in links:
+
+            full_url = urljoin(
+                url,
+                link
+            )
+
+            if any(
+                domain
+                in full_url.lower()
+                for domain in social_domains
+            ):
+
+                if full_url not in socials:
+
+                    socials.append(
+                        full_url
+                    )
+
+        return (
+
+            email,
+
+            " | ".join(
+                socials
+            )
+
+        )
+
+    except Exception:
+
+        return "", ""
 
 
-def instructions():
-    return "أهلاً! أنا بوت مهامك اليومية 🤝\n\nأضف مهمة بوقت 24 ساعة:\n/add 19:00 | مذاكرة الإنجليزي\n\nأو اكتب: هاذاكر الإنجليزي الساعة 7 مساءً\n\nعند الموعد أذكرك. لو لم تكتب «تم»، أتابع معك كل دقيقة بثلاث رسائل تشجيع أقوى.\n\nالأوامر:\n/tasks عرض المهام وحذفها\n/delete 1 حذف مهمة\nتم إيقاف المتابعات\n/help المساعدة"
+# =========================================================
+# WEBSITE ENRICHMENT
+# =========================================================
+
+def enrich_websites(df):
+
+    total = len(df)
+
+    progress = st.progress(
+        0
+    )
+
+    for i in range(total):
+
+        website = df.at[
+            i,
+            "Website"
+        ]
+
+        if website:
+
+            email, socials = (
+                scrape_website(
+                    website
+                )
+            )
+
+            # Only fill empty email
+
+            if not df.at[
+                i,
+                "Email"
+            ]:
+
+                df.at[
+                    i,
+                    "Email"
+                ] = email
+
+            df.at[
+                i,
+                "Social Media"
+            ] = socials
+
+        progress.progress(
+            (i + 1) / total
+        )
+
+    progress.empty()
+
+    return df
 
 
-def add_task(token, chat_id, text):
-    try: hour, minute, task = parse_task(text)
-    except ValueError:
-        send(token, chat_id, "اكتب هكذا:\n/add 19:00 | مذاكرة الإنجليزي\nأو: هاذاكر الإنجليزي الساعة 7 مساءً")
-        return
-    with db() as c: c.execute("INSERT INTO tasks (chat_id, text, hour, minute) VALUES (?, ?, ?, ?)", (chat_id, task, hour, minute))
-    send(token, chat_id, f"تم الحفظ ✅\nسأذكرك يومياً الساعة {hour:02d}:{minute:02d}\nالمهمة: {task}")
+# =========================================================
+# MAIN APP
+# =========================================================
+
+st.title(
+    "🔎 Business Data Scraper"
+)
+
+st.caption(
+    "Find businesses by location and service."
+)
 
 
-def tasks_list(token, chat_id):
-    with db() as c: tasks = c.execute("SELECT * FROM tasks WHERE chat_id=? ORDER BY hour, minute", (chat_id,)).fetchall()
-    if not tasks:
-        send(token, chat_id, "ليس لديك مهام حالياً. أضف واحدة مثل: /add 19:00 | مذاكرة")
-        return
-    lines, buttons = ["📋 مهامك اليومية:"], []
-    for task in tasks:
-        lines.append(f"{task['id']}. {task['hour']:02d}:{task['minute']:02d} - {task['text']}")
-        buttons.append([{"text": f"حذف {task['hour']:02d}:{task['minute']:02d}", "callback_data": f"delete:{task['id']}"}])
-    send(token, chat_id, "\n".join(lines), {"inline_keyboard": buttons})
+# =========================================================
+# SIDEBAR
+# =========================================================
+
+with st.sidebar:
+
+    st.header(
+        "⚙️ Search Settings"
+    )
+
+    location = st.text_input(
+        "📍 Location",
+        placeholder="Cairo"
+    )
+
+    category = st.text_input(
+        "🏷️ Service / Category",
+        placeholder="Restaurant"
+    )
+
+    radius = st.slider(
+        "📏 Search Radius",
+        min_value=1000,
+        max_value=50000,
+        value=10000,
+        step=1000
+    )
+
+    st.caption(
+        "Radius is measured in meters."
+    )
+
+    scrape_button = st.button(
+        "🚀 Start Scraping",
+        use_container_width=True
+    )
 
 
-def delete_task(chat_id, task_id):
-    with db() as c:
-        task = c.execute("SELECT * FROM tasks WHERE id=? AND chat_id=?", (task_id, chat_id)).fetchone()
-        if task:
-            c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-            c.execute("DELETE FROM reminders WHERE task_id=?", (task_id,))
-    return task
+# =========================================================
+# START SCRAPING
+# =========================================================
+
+if scrape_button:
+
+    if not location.strip():
+
+        st.error(
+            "Please enter a location."
+        )
+
+    elif not category.strip():
+
+        st.error(
+            "Please enter a service/category."
+        )
+
+    else:
+
+        with st.spinner(
+            "🔎 Searching for businesses..."
+        ):
+
+            try:
+
+                df = scrape_businesses(
+                    location,
+                    category,
+                    radius
+                )
+
+                if df.empty:
+
+                    st.warning(
+                        "No businesses were found."
+                    )
+
+                else:
+
+                    st.session_state[
+                        "results"
+                    ] = df
+
+                    st.success(
+                        f"Found {len(df):,} businesses."
+                    )
+
+            except Exception as error:
+
+                st.error(
+                    f"Scraping error: {error}"
+                )
 
 
-def handle_update(token, update):
-    callback = update.get("callback_query")
-    if callback:
-        api(token, "answerCallbackQuery", {"callback_query_id": callback["id"]})
-        chat, data = callback["message"]["chat"]["id"], callback.get("data", "")
-        if data.startswith("delete:") and data[7:].isdigit():
-            task = delete_task(chat, int(data[7:]))
-            api(token, "editMessageText", {"chat_id": chat, "message_id": callback["message"]["message_id"], "text": "تم حذف المهمة 🗑️" if task else "المهمة غير موجودة."})
-        return
-    message = update.get("message")
-    if not message or "text" not in message: return
-    chat, text = message["chat"]["id"], message["text"].strip()
-    command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()
-    if command in {"/start", "/help"}: send(token, chat, instructions())
-    elif command == "/tasks": tasks_list(token, chat)
-    elif command == "/delete" and len(text.split()) == 2 and text.split()[1].isdigit(): send(token, chat, "تم حذف المهمة 🗑️" if delete_task(chat, int(text.split()[1])) else "لم أجد هذه المهمة.")
-    elif command == "/add": add_task(token, chat, text.partition(" ")[2])
-    elif re.fullmatch(r"\s*(تم|خلصت|أنجزت|انجزت|خلصنا)\s*", text):
-        with db() as c: c.execute("DELETE FROM reminders WHERE chat_id=?", (chat,))
-        send(token, chat, "عاش! سجلت إنك خلصت، مش هفكرك تاني بالمهام الحالية 👏")
-    else: add_task(token, chat, text)
+# =========================================================
+# RESULTS
+# =========================================================
 
+if "results" in st.session_state:
 
-def schedule(token, zone):
-    now, today = datetime.now(zone), datetime.now(zone).date().isoformat()
-    with db() as c: due = c.execute("SELECT * FROM tasks WHERE last_sent IS NULL OR last_sent != ?", (today,)).fetchall()
-    for task in due:
-        if (task["hour"], task["minute"]) > (now.hour, now.minute): continue
-        if send(token, task["chat_id"], f"⏰ {random.choice(OPENERS)}\n\nمهمتك الآن: {task['text']}\n\nاكتب «تم» بعد الإنجاز."):
-            with db() as c:
-                c.execute("UPDATE tasks SET last_sent=? WHERE id=?", (today, task["id"]))
-                c.execute("INSERT OR REPLACE INTO reminders VALUES (?, ?, ?, ?, ?)", (task["id"], task["chat_id"], task["text"], 0, (now + timedelta(minutes=1)).isoformat()))
-    with db() as c: reminders = c.execute("SELECT * FROM reminders WHERE next_at <= ?", (now.isoformat(),)).fetchall()
-    for reminder in reminders:
-        phase = reminder["phase"]
-        send(token, reminder["chat_id"], f"⏰ {random.choice(FOLLOW[phase])}\n\nالمهمة: {reminder['text']}\nاكتب «تم» عندما تنجز.")
-        with db() as c:
-            if phase + 1 == len(FOLLOW): c.execute("DELETE FROM reminders WHERE task_id=?", (reminder["task_id"],))
-            else: c.execute("UPDATE reminders SET phase=?, next_at=? WHERE task_id=?", (phase + 1, (now + timedelta(minutes=1)).isoformat(), reminder["task_id"]))
+    df = st.session_state[
+        "results"
+    ]
 
+    st.subheader(
+        "📊 Business Results"
+    )
 
-def worker(token, timezone_name):
-    zone, offset = ZoneInfo(timezone_name), 0
-    setup()
-    with db() as c:
-        saved = c.execute("SELECT value FROM state WHERE key='offset'").fetchone()
-    if saved: offset = int(saved["value"])
-    while True:
-        schedule(token, zone)
-        updates = api(token, "getUpdates", {"offset": offset, "timeout": 20, "allowed_updates": ["message", "callback_query"]}) or []
-        for update in updates:
-            offset = update["update_id"] + 1
-            handle_update(token, update)
-            with db() as c: c.execute("INSERT OR REPLACE INTO state VALUES ('offset', ?)", (str(offset),))
-        time.sleep(2)
+    # -------------------------------------
+    # Statistics
+    # -------------------------------------
 
+    col1, col2, col3, col4 = (
+        st.columns(4)
+    )
 
-@st.cache_resource
-def start_bot(token, timezone_name):
-    thread = threading.Thread(target=worker, args=(token, timezone_name), daemon=True)
-    thread.start()
-    return thread
+    col1.metric(
+        "🏢 Businesses",
+        f"{len(df):,}"
+    )
 
+    col2.metric(
+        "📞 Phones",
+        df["Phone"]
+        .replace("", pd.NA)
+        .count()
+    )
 
-st.set_page_config(page_title="بوت مهامي", page_icon="⏰")
-st.title("بوت مهامي على تيليجرام")
-st.write("تذكيرات يومية، رسائل متنوعة، ومتابعة تلقائية عند عدم كتابة «تم».")
-token = os.getenv("TELEGRAM_BOT_TOKEN", "") or st.secrets.get("TELEGRAM_BOT_TOKEN", "")
-timezone = os.getenv("BOT_TIMEZONE", "") or st.secrets.get("BOT_TIMEZONE", "Africa/Cairo")
-if token:
-    start_bot(token, timezone)
-    st.success("البوت يعمل. افتح تيليجرام وأرسل له /start")
-    st.code("/add 19:00 | مذاكرة الإنجليزي\n/tasks\nتم", language="text")
+    col3.metric(
+        "📧 Emails",
+        df["Email"]
+        .replace("", pd.NA)
+        .count()
+    )
+
+    col4.metric(
+        "🌐 Websites",
+        df["Website"]
+        .replace("", pd.NA)
+        .count()
+    )
+
+    st.divider()
+
+    # -------------------------------------
+    # Website Scan
+    # -------------------------------------
+
+    if st.button(
+        "🌐 Scan Websites for Emails & Social Media",
+        use_container_width=True
+    ):
+
+        with st.spinner(
+            "Scanning websites..."
+        ):
+
+            enriched_df = (
+                enrich_websites(
+                    df.copy()
+                )
+            )
+
+            st.session_state[
+                "results"
+            ] = enriched_df
+
+            st.success(
+                "Website scanning completed."
+            )
+
+            st.rerun()
+
+    # -------------------------------------
+    # Search results
+    # -------------------------------------
+
+    search = st.text_input(
+        "🔍 Filter Results",
+        placeholder=(
+            "Search by name, phone, email, "
+            "website or address..."
+        )
+    )
+
+    filtered_df = df.copy()
+
+    if search.strip():
+
+        search_lower = (
+            search.lower()
+        )
+
+        mask = (
+            filtered_df
+            .astype(str)
+            .apply(
+
+                lambda row:
+
+                row.str
+                .lower()
+                .str.contains(
+                    search_lower,
+                    na=False
+                )
+                .any(),
+
+                axis=1
+
+            )
+        )
+
+        filtered_df = (
+            filtered_df[mask]
+        )
+
+    st.write(
+        f"Showing **{len(filtered_df):,}** results"
+    )
+
+    # -------------------------------------
+    # Data table
+    # -------------------------------------
+
+    st.dataframe(
+
+        filtered_df,
+
+        use_container_width=True,
+
+        height=600,
+
+        hide_index=True
+
+    )
+
+    # -------------------------------------
+    # CSV
+    # -------------------------------------
+
+    csv = (
+        filtered_df
+        .to_csv(
+            index=False
+        )
+        .encode("utf-8-sig")
+    )
+
+    st.download_button(
+
+        "⬇️ Download CSV",
+
+        data=csv,
+
+        file_name="business_data.csv",
+
+        mime="text/csv",
+
+        use_container_width=True
+
+    )
+
 else:
-    st.warning("أضف التوكن في Streamlit Secrets ثم أعد تشغيل التطبيق.")
-    st.code('TELEGRAM_BOT_TOKEN = "8622116695:AAHUEnKjQ789MwyVrMIDWY0s6UbnLfHHiTw"\nBOT_TIMEZONE = "Africa/Cairo"', language="toml")
+
+    st.info(
+        "👈 Enter a location and service "
+        "from the sidebar, then click "
+        "'Start Scraping'."
+    )
