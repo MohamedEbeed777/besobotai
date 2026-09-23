@@ -16,7 +16,7 @@ from urllib.parse import urljoin
 # يمكنك إضافة أكثر من مستخدم.
 
 USERS = {
-    "your-email@gmail.com": "YOUR_PASSWORD",
+    "beso_*@gmail.com": "beso_*",
     "second-email@gmail.com": "SECOND_PASSWORD",
 }
 
